@@ -11,5 +11,7 @@
         <string>/etc/hosts</string>
         <string>/private/etc/hosts</string>
     </array>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

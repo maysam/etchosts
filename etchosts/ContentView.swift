@@ -216,21 +216,42 @@ struct MenuBarApp: App {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem?
     var hostEntries: [HostEntry] = []
+    private var menu: NSMenu?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hide dock icon and app from Cmd+Tab
+        NSApplication.shared.setActivationPolicy(.accessory)
+        
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
             button.title = "Hosts"
             button.action = #selector(menuBarItemClicked)
         }
+        
+        // Create menu and set delegate
+        menu = NSMenu()
+        menu?.delegate = self
+        statusItem?.menu = menu
+        
         loadHostsFile()
     }
 
     @objc func menuBarItemClicked() {
-        let menu = NSMenu()
+        statusItem?.button?.performClick(nil)
+    }
+    
+    // NSMenuDelegate method
+    func menuWillOpen(_ menu: NSMenu) {
+        // Load fresh data
+        loadHostsFile()
+        
+        // Remove all existing items
+        menu.removeAllItems()
+        
+        // Add fresh items
         for entry in hostEntries {
             let menuItem = NSMenuItem(title: entry.domain, action: #selector(toggleEntry(_:)), keyEquivalent: "")
             menuItem.state = entry.isEnabled ? .on : .off
@@ -238,9 +259,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(menuItem)
         }
         menu.addItem(NSMenuItem.separator())
+        
+        // Add version info
+        if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+           let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            let versionItem = NSMenuItem(title: "Version \(version) (\(build))", action: nil, keyEquivalent: "")
+            versionItem.isEnabled = false
+            menu.addItem(versionItem)
+        }
+        
         menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
-        statusItem?.menu = menu
-        statusItem?.button?.performClick(nil)
     }
 
     @objc func toggleEntry(_ sender: NSMenuItem) {
@@ -259,41 +287,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadHostsFile() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
-                let lines = content.components(separatedBy: .newlines)
-                
-                let newEntries = lines.enumerated().compactMap { (index: Int, line: String) -> HostEntry? in
-                    let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-                    if trimmedLine.isEmpty {
-                        return nil
-                    }
-                    
-                    let isComment = trimmedLine.hasPrefix("#")
-                    let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
-                    
-                    let components = lineToProcess.components(separatedBy: .whitespaces)
-                        .filter { !$0.isEmpty }
-                    
-                    guard components.count >= 2,
-                          self.isValidIP(components[0]) else { return nil }
-                    
-                    return HostEntry(
-                        ip: components[0],
-                        domain: components[1],
-                        originalLine: line,
-                        isEnabled: !isComment,
-                        lineNumber: index
-                    )
+        do {
+            let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
+            let lines = content.components(separatedBy: .newlines)
+            
+            let newEntries = lines.enumerated().compactMap { (index: Int, line: String) -> HostEntry? in
+                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                if trimmedLine.isEmpty {
+                    return nil
                 }
                 
-                DispatchQueue.main.async {
-                    self.hostEntries = newEntries
-                }
-            } catch {
-                print("Error reading hosts file: \(error.localizedDescription)")
+                let isComment = trimmedLine.hasPrefix("#")
+                let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
+                
+                let components = lineToProcess.components(separatedBy: .whitespaces)
+                    .filter { !$0.isEmpty }
+                
+                guard components.count >= 2,
+                      self.isValidIP(components[0]) else { return nil }
+                
+                return HostEntry(
+                    ip: components[0],
+                    domain: components[1],
+                    originalLine: line,
+                    isEnabled: !isComment,
+                    lineNumber: index
+                )
             }
+            
+            self.hostEntries = newEntries
+        } catch {
+            print("Error reading hosts file: \(error.localizedDescription)")
         }
     }
 
