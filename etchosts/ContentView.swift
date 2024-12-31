@@ -51,8 +51,8 @@ struct ContentView: View {
     @State private var showError = false
     @State private var errorMessage = ""
     
-    // Function to validate IPv4 address
-    private func isValidIPv4(_ ip: String) -> Bool {
+    // Static IP validation functions
+    private static func isValidIPv4(_ ip: String) -> Bool {
         let parts = ip.split(separator: ".")
         guard parts.count == 4 else { return false }
         
@@ -62,8 +62,7 @@ struct ContentView: View {
         }
     }
     
-    // Function to validate IPv6 address
-    private func isValidIPv6(_ ip: String) -> Bool {
+    private static func isValidIPv6(_ ip: String) -> Bool {
         let parts = ip.split(separator: ":")
         guard parts.count <= 8 else { return false }
         
@@ -74,8 +73,7 @@ struct ContentView: View {
         }
     }
     
-    // Function to validate IP address (IPv4 or IPv6)
-    private func isValidIP(_ ip: String) -> Bool {
+    private static func isValidIP(_ ip: String) -> Bool {
         if ip == "255.255.255.255" || ip == "::1" || ip == "127.0.0.1" {
             return true
         }
@@ -115,64 +113,79 @@ struct ContentView: View {
     }
     
     private func loadHostsFile() {
-        do {
-            let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
-            let lines = content.components(separatedBy: .newlines)
-            
-            hostEntries = lines.enumerated().compactMap { (index, line) in
-                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-                if trimmedLine.isEmpty {
-                    return nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
+                let lines = content.components(separatedBy: .newlines)
+                
+                let newEntries = lines.enumerated().compactMap { (index: Int, line: String) -> HostEntry? in
+                    let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                    if trimmedLine.isEmpty {
+                        return nil
+                    }
+                    
+                    let isComment = trimmedLine.hasPrefix("#")
+                    let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
+                    
+                    let components = lineToProcess.components(separatedBy: .whitespaces)
+                        .filter { !$0.isEmpty }
+                    
+                    guard components.count >= 2,
+                          Self.isValidIP(components[0]) else { return nil }
+                    
+                    return HostEntry(
+                        ip: components[0],
+                        domain: components[1],
+                        originalLine: line,
+                        isEnabled: !isComment,
+                        lineNumber: index
+                    )
                 }
                 
-                let isComment = trimmedLine.hasPrefix("#")
-                let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
-                
-                let components = lineToProcess.components(separatedBy: .whitespaces)
-                    .filter { !$0.isEmpty }
-                
-                guard components.count >= 2,
-                      isValidIP(components[0]) else { return nil }
-                
-                return HostEntry(
-                    ip: components[0],
-                    domain: components[1],
-                    originalLine: line,
-                    isEnabled: !isComment,
-                    lineNumber: index
-                )
+                DispatchQueue.main.async {
+                    self.hostEntries = newEntries
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                    self.showError = true
+                }
             }
-        } catch {
-            showError(message: "Error reading hosts file: \(error.localizedDescription)")
         }
     }
     
     private func toggleHostEntry(entry: HostEntry) {
-        do {
-            let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
-            var lines = content.components(separatedBy: .newlines)
-            
-            let newLine: String
-            if entry.isEnabled {
-                // Add comment if it doesn't exist
-                newLine = "# " + entry.originalLine
-            } else {
-                // Remove comment if it exists
-                newLine = String(entry.originalLine.dropFirst()).trimmingCharacters(in: .whitespaces)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
+                var lines = content.components(separatedBy: .newlines)
+                let enabled = entry.originalLine.hasPrefix("#")
+                
+                let newLine: String
+                if enabled {
+                    // Remove comment if it exists
+                    newLine = String(entry.originalLine.dropFirst()).trimmingCharacters(in: .whitespaces)
+                } else {
+                    // Add comment if it doesn't exist
+                    newLine = "# " + entry.originalLine
+                }
+                
+                lines[entry.lineNumber] = newLine
+                let newContent = lines.joined(separator: "\n")
+                
+                // Use authorization to modify hosts file directly
+                try HostFileManager.shared.modifyHostsFile(content: newContent)
+                
+                DispatchQueue.main.async {
+                    // Reload the hosts file to reflect changes
+                    self.loadHostsFile()
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.errorMessage = error.localizedDescription
+                    self.showError = true
+                }
             }
-            
-            lines[entry.lineNumber] = newLine
-            
-            let newContent = lines.joined(separator: "\n")
-            
-            // Use authorization to modify hosts file directly
-            try HostFileManager.shared.modifyHostsFile(content: newContent)
-            
-            // Reload the hosts file to reflect changes
-            loadHostsFile()
-            
-        } catch {
-            showError(message: "Error updating hosts file: \(error.localizedDescription)")
         }
     }
     
@@ -246,65 +259,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func loadHostsFile() {
-        do {
-            let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
-            let lines = content.components(separatedBy: .newlines)
-            
-            hostEntries = lines.enumerated().compactMap { (index, line) in
-                let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-                if trimmedLine.isEmpty {
-                    return nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
+                let lines = content.components(separatedBy: .newlines)
+                
+                let newEntries = lines.enumerated().compactMap { (index: Int, line: String) -> HostEntry? in
+                    let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+                    if trimmedLine.isEmpty {
+                        return nil
+                    }
+                    
+                    let isComment = trimmedLine.hasPrefix("#")
+                    let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
+                    
+                    let components = lineToProcess.components(separatedBy: .whitespaces)
+                        .filter { !$0.isEmpty }
+                    
+                    guard components.count >= 2,
+                          self.isValidIP(components[0]) else { return nil }
+                    
+                    return HostEntry(
+                        ip: components[0],
+                        domain: components[1],
+                        originalLine: line,
+                        isEnabled: !isComment,
+                        lineNumber: index
+                    )
                 }
                 
-                let isComment = trimmedLine.hasPrefix("#")
-                let lineToProcess = isComment ? String(trimmedLine.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmedLine
-                
-                let components = lineToProcess.components(separatedBy: .whitespaces)
-                    .filter { !$0.isEmpty }
-                
-                guard components.count >= 2,
-                      isValidIP(components[0]) else { return nil }
-                
-                return HostEntry(
-                    ip: components[0],
-                    domain: components[1],
-                    originalLine: line,
-                    isEnabled: !isComment,
-                    lineNumber: index
-                )
+                DispatchQueue.main.async {
+                    self.hostEntries = newEntries
+                }
+            } catch {
+                print("Error reading hosts file: \(error.localizedDescription)")
             }
-        } catch {
-            print("Error reading hosts file: \(error.localizedDescription)")
         }
     }
 
     private func toggleHostEntry(entry: HostEntry) {
-        do {
-            let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
-            var lines = content.components(separatedBy: .newlines)
-            let enabled = entry.originalLine.hasPrefix("#")
-            
-            let newLine: String
-            if enabled {
-                // Remove comment if it exists
-                newLine = String(entry.originalLine.dropFirst()).trimmingCharacters(in: .whitespaces)
-            } else {
-                // Add comment if it doesn't exist
-                newLine = "# " + entry.originalLine
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let content = try String(contentsOfFile: "/etc/hosts", encoding: .utf8)
+                var lines = content.components(separatedBy: .newlines)
+                let enabled = entry.originalLine.hasPrefix("#")
+                
+                let newLine: String
+                if enabled {
+                    // Remove comment if it exists
+                    newLine = String(entry.originalLine.dropFirst()).trimmingCharacters(in: .whitespaces)
+                } else {
+                    // Add comment if it doesn't exist
+                    newLine = "# " + entry.originalLine
+                }
+                
+                lines[entry.lineNumber] = newLine
+                let newContent = lines.joined(separator: "\n")
+                
+                // Use authorization to modify hosts file directly
+                try HostFileManager.shared.modifyHostsFile(content: newContent)
+                
+                DispatchQueue.main.async {
+                    // Reload the hosts file to reflect changes
+                    self.loadHostsFile()
+                }
+            } catch {
+                print("Error updating hosts file: \(error.localizedDescription)")
             }
-            
-            lines[entry.lineNumber] = newLine
-            
-            let newContent = lines.joined(separator: "\n")
-            
-            // Use authorization to modify hosts file directly
-            try HostFileManager.shared.modifyHostsFile(content: newContent)
-            
-            // Reload the hosts file to reflect changes
-            loadHostsFile()
-            
-        } catch {
-            print("Error updating hosts file: \(error.localizedDescription)")
         }
     }
 
